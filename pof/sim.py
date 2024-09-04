@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """Support of the PoF SIM board"""
-__version__ = '0.1.0 2024-08-15'# new <M> message format
+__version__ = '0.3.1 2024-08-23'# STS vRef added, get_data_lock, serdev timeout reduced to 0.1
 
 import sys, time, threading
 timer = time.perf_counter
@@ -11,10 +11,12 @@ from liteserver import liteserver
 LDO = liteserver.LDO
 AppName = 'sim'
 SerDev = None
-Event = threading.Event()
+#Event = threading.Event()
+get_data_lock = threading.Lock()#Important! To avoid missing writes
 DevInstance = None
 
-SRate = [5.88,11.76,23.52,47.01,93.93,187.45,373.28,740.18,1499.49,2816.35]
+SRate = [5.88,11.76,23.52,47.01,93.93,187.45,373.28,740.18]#,1499.49,2816.35'
+SRateLV = [str(i) for  i in SRate]
 
 #````````````````````````````Helper functions`````````````````````````````````
 def printTime(): return time.strftime("%m%d:%H%M%S")
@@ -24,11 +26,11 @@ def croppedText(txt, limit=200):
     return txt
 def prints(prefix, msg):
     try:
-        DevInstance.PV['status'].value[0] = f'{prefix}_{msg}'
+        DevInstance.PV['status'].value = f'{prefix}_{msg}'
         DevInstance.PV['status'].timestamp = time.time()
         DevInstance.publish()
     except Exception as e: 
-        print(f'Exception: {e}')
+        print(f'Exception in prints: {e}')
     print(f'{prefix}_{AppName}@{printTime()}: {msg}')
         
 def printi(msg): prints('', msg)
@@ -46,21 +48,21 @@ def b2i(buf):
     return int.from_bytes(buf, 'little')
 
 def open_serdev():
-    timeout = 1
+    timeout = 0.1
     try:
-        r = serial.Serial(pargs.tty, pargs.baudrate, timeout=timeout)
+        r = serial.Serial(pargs.tty, pargs.baudrate, timeout=timeout)#writeTimeout=5)
     except serial.SerialException as e:
         printe(f'Could not open {pargs.tty}: {e}')
         sys.exit(1)
+    print(f'wt: {r.writeTimeout}')
     return r
 
 def get_data():
     """Read data from the serial interface"""
-    #with get_data_lock:
-    Event.set()
     printvv('>get_data')
     #payload = SerDev.readline()
-    payload = SerDev.read_until(b'>')
+    with get_data_lock:
+        payload = SerDev.read_until(b'>')
     return payload
 
 def decode_sts(txt):
@@ -73,34 +75,41 @@ def decode_sts(txt):
         r[key] = val
     return r
 
+def write_uart(cmd:str):
+    for i in cmd:
+        SerDev.write(i.encode())
+        time.sleep(0.01)
 #````````````````````````````Lite Data Objects````````````````````````````````
 class Dev(liteserver.Device):
-    """ Derived from liteserver.Device.
-    Note???: All class members, which are not process variables should 
-    be prefixed with _"""
     
-    ArrSize = 4
-    ArrMax = 16
-    samples = []
+    samples = []# Sample storage between reports
+    timeOfFirstSample = 0.
+    timeOfLastSample = 0.
     
     def __init__(self):
         self.initialized = False
         self.dummy = 0
+        vref = float(pargs.ref)
         pars = {
 'version':  LDO('RI',f'{AppName} version', __version__),
 'send':     LDO('RWEI','Send command to device','STS?',setter=self.set_send),
+'vRef':     LDO('RC','Reference voltage', vref, units='V'),
 'msg':      LDO('R','Message from {AppName}',['']),
-'adcScale': LDO('RC','Scale to convert ADC readings to volts', 5./2**23,units='V'),
+'adcScale': LDO('RC','Scale to convert ADC readings to volts', vref/2**23,units='V'),
 'nsamples': LDO('R','Number of samples, accumulated since last report', 0),
 'nstats':   LDO('R','Samples in on-board statistics calculation', 0),
 'mean':     LDO('R','On-board-calculated mean', 0., units='V'),
 'rms':      LDO('R','On-board-calculated rms', 0., units='V'),
 'p2p':      LDO('R','On-board peak-to-peak amplitude', 0., units='V'),
 'samples':  LDO('R','ADC samples', [0.], units='V'),
-'xaxis':    LDO('R','Bottom axis array for samples', [0.], units='s'),
-'srate':    LDO('R','Sampling rate of the ADC', 7., units='Hz'),
-'recLimit': LDO('R','Max number of samples stored between reports',0),
-'cycle':    LDO('RI','Cycle number',0),
+'xaxis':    LDO('R','Time axis array for samples (approximate)', [0.], units='s'),
+'srate':    LDO('RWE','Sampling rate of the ADC', SRateLV[0], units='Hz',
+                legalValues=SRateLV, setter=self.set_srate),
+'recLimit': LDO('RWE','Limit of samples accumulated between reports',0,
+                setter=self.set_recLimit),
+'timeout':  LDO('RWE','Timeout for receiving one character from PIM, it defines data rate',
+                0, units='ms', setter=self.set_timeout),
+'cycle':    LDO('RI','Cycle number, updates periodically',0),
 'rps':      LDO('RI','Cycles per second',[0.],units='Hz'),
         }
         super().__init__('dev1', pars)
@@ -110,14 +119,13 @@ class Dev(liteserver.Device):
         self.initialized = True
         printi('Initialization finished')
         
-
     #``````````````Overridables```````````````````````````````````````````````        
     def start(self):
         thread = threading.Thread(target=self.seriaListener, daemon = True)
         thread.start()
-        if not Event.wait(.2):
-            printe('Listener did not start')
-            sys.exit(1)
+        #if not Event.wait(.2):
+        #    printe('Listener did not start')
+        #    sys.exit(1)
         self.execute_command('STS?')
 
     def stop(self):
@@ -129,68 +137,121 @@ class Dev(liteserver.Device):
         value = pv.value[0]
         pv.value[0] = value/10.
 
+    def execute_command(self, cmd:str, sts=False):
+        with get_data_lock:
+            write_uart(f'<{cmd}>')
+        if not sts:
+            time.sleep(0.1)
+            with get_data_lock:
+                write_uart('<STS?>')
+
     def set_send(self):
-        printv(f"send: {self.PV['send'].value[0]}")
         cmd = self.PV['send'].value[0]
-        #self.PV['send'].value[0] = ''
-        self.execute_command(cmd)
+        sts = False
+        if cmd == 'STS?':
+            # clear status and msg
+            sts = True
+            self.PV['msg'].set_valueAndTimestamp('')
+            self.PV['status'].set_valueAndTimestamp('Sent STS?')            
+        self.execute_command(cmd, sts)
         return 0
 
-    def execute_command(self, cmd:str):
-        msgb = f'<{cmd}>'.encode('utf-8')
-        printv(f'Sending [{len(msgb)}]: {msgb}')
-        SerDev.write(msgb)
+    def set_srate(self):
+        value = self.PV['srate'].value[0]
+        idx = SRateLV.index(value)
+        self.execute_command(f'S {idx}')
+        return 0
+
+    def set_timeout(self):
+        value = self.PV['timeout'].value[0]
+        self.execute_command(f'TO {value}')
+        return 0
+
+    def set_recLimit(self):
+        value = self.PV['recLimit'].value[0]
+        self.execute_command(f'R {value}')
+        return 0
 
     def handle_devPacket(self, record):
+        # return True if something was collected for publishing
         #print(f'payload: {payload}')
         #for record in payload[:-1].split(b'>'):
         #print(f'record: {record}')
-        txt = record.decode()
+        ts = self.timestamp
+        try:
+            txt = record.decode()
+        except Exception as e:
+            printw(f'Exception in record.decode: {e}')
+            return False
         if len(txt) <= 1:
-            return
+            return False
         if txt[0] == '\n':
             txt = txt[1:]
         if txt[0] != '<':
             # This should not happen with recent firmware
             printw(f'msg: {txt}')
-            self.PV['msg'].set_valueAndTimestamp(txt, self.timestamp)
-            return
+            self.PV['msg'].set_valueAndTimestamp(txt, ts)
+            return True
         printv(f'>handle {txt}')
         ag = self.PV['adcScale'].value[0]
         if txt[1] == 'M':
             # Regular report
             txtnums = txt[2:-1].split(',')
-            for i,ng in enumerate([('nsamples',0),('nstats',0),('mean',.1),('rms',.1),('p2p',1.)]):
+            for i,ng in enumerate([('nsamples',0),('nstats',0),('mean',.1),
+                    ('rms',.1),('p2p',1.)]):
                 name,gain = ng
                 try:
                     v = int(txtnums[i]) if gain==0 else float(txtnums[i])*gain*ag
-                except ValueError as e:
+                except Exception as e:
                     printw(f'Statistics record corrupted: {e}')
-                    return
-                self.PV[name].value[0] = v
-                self.PV[name].timestamp = self.timestamp
+                    return False
+                self.PV[name].set_valueAndTimestamp([v],ts)
             #print(f'samples: {Dev.samples}')
-            self.PV['samples'].value = Dev.samples
-            self.PV['samples'].timestamp = self.timestamp
-            self.PV['xaxis'].value = np.arange(len(Dev.samples))/self.PV['srate'].value[0]
-            self.PV['xaxis'].timestamp = self.timestamp
+            l = len(Dev.samples)
+            self.PV['samples'].set_valueAndTimestamp(Dev.samples,ts)
+            try:
+                tstep = (Dev.timeOfLastSample - Dev.timeOfFirstSample)/l
+                xaxis = np.arange(l)*tstep
+                self.PV['xaxis'].set_valueAndTimestamp(xaxis,ts)
+            except: pass
             Dev.samples = []
+            Dev.timeOfFirstSample = 0.
+            return True
 
         elif txt[1] == 'R':
             try:
-                values = np.fromstring(txt[2:-1],sep=',')*ag
+                values = (np.fromstring(txt[2:-1],sep=',')*ag).round(9)
             except:
                 return
+            t = time.time()
+            Dev.timeOfLastSample = t
+            if Dev.timeOfFirstSample == 0:
+                Dev.timeOfFirstSample = t
             Dev.samples += list(values)
+            return False
+
         elif txt[1] == 'T':
             s = txt[2:-1]
-            self.PV['msg'].set_valueAndTimestamp(s, self.timestamp)
-            m = decode_sts(s)
-            print(f'amap: {m}')
-            ts = self.timestamp
-            i = [int(m['Srate'])][0]
-            self.PV['srate'].set_valueAndTimestamp([SRate[i]],ts)
-            self.PV['recLimit'].set_valueAndTimestamp([int(m['RecLimit'])],ts)
+            printv(f'msg: {txt}')
+            if txt[2:4] == 'SR': 
+                # Response to STS
+                m = decode_sts(s)
+                printv(f'amap: {m}')
+                i = [int(m['SR'])][0]
+                self.PV['srate'].set_valueAndTimestamp([str(SRate[i])],ts)
+                self.PV['recLimit'].set_valueAndTimestamp([int(m['RL'])],ts)
+                self.PV['timeout'].set_valueAndTimestamp([int(m['TO'])],ts)
+            else:
+                #self.PV['msg'].set_valueAndTimestamp(s, ts)
+                self.PV['status'].set_valueAndTimestamp(s, ts)
+            return True
+        #elif txt[1] =='?':
+        #    #Error message
+        #    self.PV['status'].set_valueAndTimestamp(txt[1:], ts)
+        else:
+            self.PV['msg'].set_valueAndTimestamp(txt[2:-1], ts)
+            printe(f'Unexpected message')#: {txt[1:-1]}')
+        return True
 
     def seriaListener(self):
         print('``````````Listener Started``````````````````````````````')
@@ -198,11 +259,12 @@ class Dev(liteserver.Device):
 
         prevCycle = 0
         self.timestamp = time.time()
-        periodic_update = time.time()
+        periodic_update = self.timestamp
         pv_cycle = self.PV['cycle']
+        pv_run = self.PV['run']
         while not Dev.EventExit.is_set():
             try:
-                if self.run.value[0][:4] == 'Stop':
+                if pv_run.value[0][:4] == 'Stop':
                     break
             except: pass
 
@@ -234,9 +296,10 @@ class Dev(liteserver.Device):
                 printvv('Initialization not finished')
                 # __init__() did not finish, no sense to proceed further
                 continue
-
-            self.handle_devPacket(payload)
             pv_cycle.value[0] += 1
+
+            if not self.handle_devPacket(payload):
+                continue
 
             #print('publish all modified parameters of '+self.name)
             # invalidate timestamps for changing variables, otherwise the
@@ -245,7 +308,8 @@ class Dev(liteserver.Device):
             #    self.PV[i].timestamp = self.timestamp
             ts = timer()
             shippedBytes = self.publish()
-            printvv(f'shipped: {shippedBytes}')
+            printv(f'shipped: {shippedBytes}')
+
         print('########## listener exit ##########')
 #,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,
 if __name__ == "__main__":
@@ -263,6 +327,8 @@ f'Debugging level: bits[0:1] for {AppName}, bits[2:3] for liteServer')
 'Network interface of the server.')
     parser.add_argument('-p','--port', type=int, default=9700, help=\
 'Serving port.') 
+    parser.add_argument('-r','--ref', default='3.3', help=\
+'Reference voltage.')
     parser.add_argument('-S','--stop',  action='store_true', help=\
 'Do not start')
     parser.add_argument('tty', nargs='?', default='/dev/ttyUSB0', help=\
