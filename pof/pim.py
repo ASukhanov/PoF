@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """Support of the PoF PIM board"""
-__version__ = '0.3.1 2024-09-20'# cloned from sim.py
+__version__ = '0.3.2 2024-09-21'# PIM response decoded
 
 import sys, time, threading
 timer = time.perf_counter
@@ -37,9 +37,7 @@ def printi(msg): prints('', msg)
 def printw(msg): prints('WAR', msg)
 def printe(msg): prints('ERR', msg)
 def _printv(msg, level=0):
-    if pargs.dbg is None:
-        return
-    if pargs.dbg > level:
+    if pargs.verbose > level:
         print(f'dbg{level}@{printTime()}: '+msg)
 def printv(msg):   _printv(msg, 0)
 def printvv(msg):  _printv(msg, 1)
@@ -59,20 +57,21 @@ def open_serdev():
 
 def get_data():
     """Read data from the serial interface"""
-    printvv('>get_data')
+    #printvv('>get_data')
     #payload = SerDev.readline()
     with get_data_lock:
         payload = SerDev.read_until(b'>')
     return payload
 
-def decode_sts(txt):
-    # Translate response of the STS? command to map
+def decode_status(txt):
+    # Translate response of SIM and PIM boards to STS? command
     s = txt.replace(' ','')
     tokens = s.split(',')
     r = {}
     for token in tokens:
         key,val = token.split(':')
         r[key] = val
+    #printv(f'decoded status: {r}')
     return r
 
 def write_uart(cmd:str):
@@ -109,9 +108,15 @@ class Dev(liteserver.Device):
                 setter=self.set_recLimit),
 'timeout':  LDO('RWE','Timeout for receiving one character from PIM, it defines data rate',
                 0, units='ms', setter=self.set_timeout),
+# PIM-related parameters:
+'pim_LTMP': LDO('R','PIM laser temperature', 0., units='C`'),
+'pim_LRBK': LDO('R','PIM laser current readback', 0., units='V'), 
+
+# General monitors
 'cycle':    LDO('RI','Cycle number, updates periodically',0),
 'rps':      LDO('RI','Cycles per second',[0.],units='Hz'),
         }
+
         super().__init__('dev1', pars)
         if not pargs.stop:
             self.start()
@@ -138,6 +143,7 @@ class Dev(liteserver.Device):
         pv.value[0] = value/10.
 
     def execute_command(self, cmd:str, sts=False):
+        printv(f'execute_command: {cmd}')
         with get_data_lock:
             write_uart(f'<{cmd}>')
         if not sts:
@@ -189,10 +195,11 @@ class Dev(liteserver.Device):
         if idx == -1:
            return False
         txt = txt[idx:]
-        printv(f'>handle {txt}')
+        #printvv(f'>handle {txt}')
         ag = self.PV['adcScale'].value[0]
         if txt[1] == 'M':
-            # Regular report
+            # SIM statistics: <M7,7,-2670,14,4,110868713>
+            printv(f'>handle M: {txt}')
             txtnums = txt[2:-1].split(',')
             for i,ng in enumerate([('nsamples',0),('nstats',0),('mean',.1),
                     ('rms',.1),('p2p',1.)]):
@@ -202,7 +209,7 @@ class Dev(liteserver.Device):
                 except Exception as e:
                     printw(f'Statistics record corrupted: {e}')
                     return False
-                printv(f'set_value {v,ts}')
+                #printv(f'set_value {v,ts}')
                 self.PV[name].set_valueAndTimestamp([v],ts)
             #print(f'samples: {Dev.samples}')
             l = len(Dev.samples)
@@ -217,10 +224,13 @@ class Dev(liteserver.Device):
             return True
 
         elif txt[1] == 'R':
+            # SIM samples
+            printvv(f'>handle R: {txt}')
             try:
                 values = (np.fromstring(txt[2:-1],sep=',')*ag).round(9)
             except:
                 return
+            # accumulate Dev.samples
             t = time.time()
             Dev.timeOfLastSample = t
             if Dev.timeOfFirstSample == 0:
@@ -228,13 +238,14 @@ class Dev(liteserver.Device):
             Dev.samples += list(values)
             return False
 
-        elif txt[1] == 'T':
+        elif txt[1] in 'T':
+            # SIM status: <TSR:0,TO:3,RL:800,T:110869248,V:0.1.4>
+            printv(f'>handle T: {txt}')
             s = txt[2:-1]
-            printv(f'msg: {txt}')
+            print(f'SIM status: {txt}')
             if txt[2:4] == 'SR': 
                 # Response to STS
-                m = decode_sts(s)
-                printv(f'amap: {m}')
+                m = decode_status(s)
                 i = [int(m['SR'])][0]
                 self.PV['srate'].set_valueAndTimestamp([str(SRate[i])],ts)
                 self.PV['recLimit'].set_valueAndTimestamp([int(m['RL'])],ts)
@@ -243,12 +254,23 @@ class Dev(liteserver.Device):
                 #self.PV['msg'].set_valueAndTimestamp(s, ts)
                 self.PV['status'].set_valueAndTimestamp(s, ts)
             return True
+
+        elif txt[1] in 'V':
+            # PIM status: <V:0.1,T:112733543,ERR:0,SST:1,LSW:1,LRT:1,LTMP:40.4,LRBK:2.5>
+            printv(f'>handle V: {txt}')
+            s = txt[1:-1]
+            print(f'PIM status: {txt}')
+            m = decode_status(s)
+            self.PV['pim_LTMP'].set_valueAndTimestamp([float(m['LTMP'])],ts)
+            self.PV['pim_LRBK'].set_valueAndTimestamp([float(m['LRBK'])],ts)
+            return True
+
         #elif txt[1] =='?':
         #    #Error message
         #    self.PV['status'].set_valueAndTimestamp(txt[1:], ts)
         else:
             self.PV['msg'].set_valueAndTimestamp(txt[2:-1], ts)
-            printe(f'Unexpected message')#: {txt[1:-1]}')
+            printe(f'Unexpected message: `{txt}`')
         return True
 
     def seriaListener(self):
@@ -276,6 +298,7 @@ class Dev(liteserver.Device):
                   ((pv_cycle.value[0] - prevCycle)/dt, ts)
                 self.PV['cycle'].timestamp = ts
                 prevCycle = pv_cycle.value[0]
+                self.execute_command('STS?')
 
             # Wait/Receive data from device
             self.timestamp = time.time()
@@ -319,8 +342,6 @@ if __name__ == "__main__":
     defaultIP = liteserver.ip_address('')
     parser.add_argument('-b', '--baudrate', type=int, default=115200, help=\
 'Baud rate of the tty')
-    parser.add_argument('-d', '--dbg', type=int, default=0, help=\
-f'Debugging level: bits[0:1] for {AppName}, bits[2:3] for liteServer')
     parser.add_argument('-i','--interface', default = defaultIP, help=\
 'Network interface of the server.')
     parser.add_argument('-p','--port', type=int, default=9700, help=\
@@ -329,13 +350,15 @@ f'Debugging level: bits[0:1] for {AppName}, bits[2:3] for liteServer')
 'Reference voltage.')
     parser.add_argument('-S','--stop',  action='store_true', help=\
 'Do not start')
+    parser.add_argument('-v', '--verbose', action='count', default=0, help=\
+      'Show more log messages (-vv: show even more).')
     parser.add_argument('tty', nargs='?', default='/dev/ttyUSB0', help=\
 'Serial device for communication with hardware')
     pargs = parser.parse_args()
 
     SerDev = open_serdev()
 
-    liteserver.Server.dbg = pargs.dbg >> 2
+    #liteserver.Server.dbg = pargs.dbg >> 2
     DevInstance = Dev()
     devices = [DevInstance]
 
