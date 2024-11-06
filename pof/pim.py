@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """Support of the PoF PIM board"""
-__version__ = '0.4.0 2024-10-31'# Added current, noise, pimStatus, laser
+__version__ = '0.4.2 2024-11-04'# added laser, corrected execute_command()
+#TODO: handle <?ERR?...> and <T...> messages from SIM
 
 import sys, time, threading
 timer = time.perf_counter
@@ -18,6 +19,8 @@ DevInstance = None
 Rsense = 10.# Ohms
 SRate = [5.88,11.76,23.52,47.01,93.93,187.45,373.28,740.18]#,1499.49,2816.35'
 SRateLV = [str(i) for  i in SRate]
+laserLV = ['','OFF','MinPower','MaxPower']
+SerialReadTimout = 0.4# Timeout for serial input, If it less than 0.2 that may cause cropped input.
 
 #````````````````````````````Helper functions`````````````````````````````````
 def printTime(): return time.strftime("%m%d:%H%M%S")
@@ -27,16 +30,15 @@ def croppedText(txt, limit=200):
     return txt
 def prints(prefix, msg):
     try:
-        DevInstance.PV['status'].value = f'{prefix}_{msg}'
+        DevInstance.PV['status'].value = f'{prefix}{msg}'
         DevInstance.PV['status'].timestamp = time.time()
-        DevInstance.publish()
     except Exception as e: 
         print(f'Exception in prints: {e}')
-    print(f'{prefix}_{AppName}@{printTime()}: {msg}')
+    print(f'{prefix}{AppName}@{printTime()}: {msg}')
         
 def printi(msg): prints('', msg)
-def printw(msg): prints('WAR', msg)
-def printe(msg): prints('ERR', msg)
+def printw(msg): prints('WAR:', msg)
+def printe(msg): prints('ERR:', msg)
 def _printv(msg, level=0):
     if pargs.verbose > level:
         print(f'dbg{level}@{printTime()}: '+msg)
@@ -47,9 +49,8 @@ def b2i(buf):
     return int.from_bytes(buf, 'little')
 
 def open_serdev():
-    timeout = 0.1
     try:
-        r = serial.Serial(pargs.tty, pargs.baudrate, timeout=timeout)#writeTimeout=5)
+        r = serial.Serial(pargs.tty, pargs.baudrate, timeout=SerialReadTimout)#writeTimeout=5)
     except serial.SerialException as e:
         printe(f'Could not open {pargs.tty}: {e}')
         sys.exit(1)
@@ -69,9 +70,12 @@ def decode_status(txt):
     s = txt.replace(' ','')
     tokens = s.split(',')
     r = {}
-    for token in tokens:
-        key,val = token.split(':')
-        r[key] = val
+    try:
+        for token in tokens:
+            key,val = token.split(':')
+            r[key] = val
+    except:
+        printw(f'Status format error: {txt}')
     #printv(f'decoded status: {r}')
     return r
 
@@ -88,17 +92,19 @@ class Dev(liteserver.Device):
     
     def __init__(self):
         self.initialized = False
-        self.dummy = 0
+        self.forcePublish = False# for use in setters to trigger publishing
         vref = float(pargs.ref)
         pars = {
-'version':  LDO('RI',f'{AppName} version', __version__),
+'version':  LDO('RI',f'{AppName} version', 'version '+__version__),
 'send':     LDO('RWEI','Send command to device','STS?',setter=self.set_send),
 'vRef':     LDO('RC','Reference voltage', vref, units='V'),
 'msg':      LDO('R','Message from {AppName}',['']),
-'laser':    LDO('RWE','Laser Control',[''], legalValues=['','OFF','MinPower','MaxPower'],
+'Clean':    LDO('WEI','Clear error and warning messages', None, setter=self.set_clean),
+'laser':    LDO('RWE','Laser Control',[''], legalValues=laserLV,
                 setter=self.set_laser),
 'adcScale': LDO('RC','Scale to convert ADC readings to volts', vref/2**23,units='V'),
-'nsamples': LDO('R','Number of samples, accumulated since last report, depends on srate and timeout', 0),
+'nsamples': LDO('R','Number of samples, accumulated by SIM since last report, depends on srate and timeout', 0),
+'received': LDO('R','Number of samples received from SIM', 0),
 'nstats':   LDO('R','Number of samples in on-board statistics calculation', 0),
 #'mean':     LDO('R','On-board-calculated mean of the voltage over Rsense', 0., units='V'),
 'current':  LDO('R','Average current through Rsense, averaged over 1 s.', 0., units='A'),
@@ -110,7 +116,7 @@ class Dev(liteserver.Device):
                 legalValues=SRateLV, setter=self.set_srate),
 'recLimit': LDO('RWE','Limit of samples accumulated between reports (1 s)',0,
                 setter=self.set_recLimit),
-'timeout':  LDO('RWE','Timeout for receiving one character from PIM, it defines data rate',
+'timeout':  LDO('RWE','Timeout in SIM for receiving one character from PIM, it defines data rate',
                 0, units='ms', setter=self.set_timeout),
 # PIM-related parameters:
 'pim_LTMP': LDO('R','PIM laser temperature', 0., units='C`'),
@@ -136,7 +142,7 @@ class Dev(liteserver.Device):
         #if not Event.wait(.2):
         #    printe('Listener did not start')
         #    sys.exit(1)
-        self.execute_command('STS?')
+        self.execute_command('STS?', update_status=True)
 
     def stop(self):
         printi(f'>{AppName}.stop()')
@@ -147,22 +153,21 @@ class Dev(liteserver.Device):
         value = pv.value[0]
         pv.value[0] = value/10.
 
-    def execute_command(self, cmd:str, update_status=False):
+    def execute_command(self, cmd:str, update_status=True):
+        printv(f'execute_command: {cmd}')
         with get_data_lock:
-            printi(f'write_uart <{cmd}>')
             write_uart(f'<{cmd}>')
         if update_status:
             time.sleep(0.1)
             with get_data_lock:
-                printi(f'write_uart <STS?>')
                 write_uart('<STS?>')
 
     def set_send(self):
         cmd = self.PV['send'].value[0]
-        sts = False
+        sts = True
         if cmd == 'STS?':
             # clear status and msg
-            sts = True
+            sts = False
             self.PV['msg'].set_valueAndTimestamp('')
             self.PV['status'].set_valueAndTimestamp('Sent STS?')            
         self.execute_command(cmd, sts)
@@ -189,7 +194,16 @@ class Dev(liteserver.Device):
         cmd = {'OFF':'LSR 0','MinPower':'LSR 1','MaxPower':'LSR 2'}.get(value)
         if cmd is None:
             return 1
-        self.execute_command(f'{cmd}', update_status=True)
+        self.execute_command(f'{cmd}')
+        return 0
+
+    def set_clean(self):
+        ts = time.time()
+        self.PV['status'].set_valueAndTimestamp('',ts)
+        self.PV['msg'].set_valueAndTimestamp('',ts)
+        self.PV['pim_Status'].set_valueAndTimestamp('',ts)
+        #self.publish() This would lock!!! 
+        self.forcePublish = True# trigger one publish() in main thread
         return 0
 
     def handle_devPacket(self, record):
@@ -211,6 +225,9 @@ class Dev(liteserver.Device):
         txt = txt[idx:]
         #printvv(f'>handle {txt}')
         ag = self.PV['adcScale'].value[0]
+        if len(txt) == 0:
+            printw('empty message `<` from pim')
+            return False
         if txt[1] == 'M':
             # SIM statistics: <M7,7,-2670,14,4,110868713>
             printv(f'>handle M: {txt}')
@@ -227,6 +244,7 @@ class Dev(liteserver.Device):
                 self.PV[name].set_valueAndTimestamp([v],ts)
             #print(f'samples: {Dev.samples}')
             l = len(Dev.samples)
+            self.PV['received'].set_valueAndTimestamp(l,ts)
             self.PV['samples'].set_valueAndTimestamp(Dev.samples,ts)
             try:
                 tstep = (Dev.timeOfLastSample - Dev.timeOfFirstSample)/l
@@ -256,7 +274,7 @@ class Dev(liteserver.Device):
             # SIM status: <TSR:0,TO:3,RL:800,T:110869248,V:0.1.4>
             printv(f'>handle T: {txt}')
             s = txt[2:-1]
-            print(f'SIM status: {txt}')
+            printi(f'SIM status: {txt}')
             if txt[2:4] == 'SR': 
                 # Response to STS
                 m = decode_status(s)
@@ -273,11 +291,25 @@ class Dev(liteserver.Device):
             # PIM status: <V:0.1,T:112733543,ERR:0,SST:1,LSW:1,LRT:1,LTMP:40.4,LRBK:2.5>
             printv(f'>handle V: {txt}')
             s = txt[1:-1]
-            print(f'PIM status: {txt}')
+            printi(f'PIM status: {txt}')
             m = decode_status(s)
-            self.PV['pim_Status'].set_valueAndTimestamp(txt,ts)
-            self.PV['pim_LTMP'].set_valueAndTimestamp([float(m['LTMP'])],ts)
-            self.PV['pim_LRBK'].set_valueAndTimestamp([float(m['LRBK'])],ts)
+            self.PV['pim_Status'].set_valueAndTimestamp([txt],ts)
+            try:
+                self.PV['pim_LTMP'].set_valueAndTimestamp([float(m['LTMP'])],ts)
+                self.PV['pim_LRBK'].set_valueAndTimestamp([float(m['LRBK'])],ts)
+            except:
+                printe(f'Corrupted PIM Status: `{txt}`')
+                return False
+
+            # update laser status if changed
+            try:    currentStatus = {'0':'OFF','1':'MinPower','2':'MaxPower'}[m['LRT']]
+            except Exception as e:
+                printw(f'Unexpected laser status: {s}')
+                return False
+            if currentStatus != self.PV['laser'].value[0]:
+                print(f"laser status changed to {currentStatus} from `{self.PV['laser'].value[0]}")
+                self.PV['laser'].set_valueAndTimestamp([currentStatus],ts)
+
             return True
 
         #elif txt[1] =='?':
@@ -286,6 +318,7 @@ class Dev(liteserver.Device):
         else:
             self.PV['msg'].set_valueAndTimestamp(txt[2:-1], ts)
             printe(f'Unexpected message: `{txt}`')
+            return False
         return True
 
     def seriaListener(self):
@@ -313,14 +346,14 @@ class Dev(liteserver.Device):
                   ((pv_cycle.value[0] - prevCycle)/dt, ts)
                 self.PV['cycle'].timestamp = ts
                 prevCycle = pv_cycle.value[0]
-                self.execute_command('STS?')
+                self.execute_command('STS?', update_status=False)
 
             # Wait/Receive data from device
             self.timestamp = time.time()
             try:
                 payload = get_data()
             except KeyboardInterrupt:
-                print(' Interrupted')
+                printi(' Interrupted')
                 SerDev.close()
                 sys.exit(1)
             except serial.SerialException as e:
@@ -335,18 +368,16 @@ class Dev(liteserver.Device):
             pv_cycle.value[0] += 1
 
             if not self.handle_devPacket(payload):
-                continue
+                if not self.forcePublish:
+                    continue
 
             #print('publish all modified parameters of '+self.name)
-            # invalidate timestamps for changing variables, otherwise the
-            # publish() will ignore them
-            #for i in ['cycle']:
-            #    self.PV[i].timestamp = self.timestamp
             ts = timer()
             shippedBytes = self.publish()
+            self.forcePublish = False
             printv(f'shipped: {shippedBytes}')
 
-        print('########## listener exit ##########')
+        printi('########## listener exit ##########')
 #,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,
 if __name__ == "__main__":
     # parse arguments
