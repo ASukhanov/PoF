@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """Support of the PoF PIM board"""
-__version__ = '0.4.2 2024-11-04'# added laser, corrected execute_command()
+__version__ = '0.4.3 2024-11-07'# Clean! improved, 
 #TODO: handle <?ERR?...> and <T...> messages from SIM
 
 import sys, time, threading
@@ -99,7 +99,7 @@ class Dev(liteserver.Device):
 'send':     LDO('RWEI','Send command to device','STS?',setter=self.set_send),
 'vRef':     LDO('RC','Reference voltage', vref, units='V'),
 'msg':      LDO('R','Message from {AppName}',['']),
-'Clean':    LDO('WEI','Clear error and warning messages', None, setter=self.set_clean),
+'Clean!':    LDO('WEI','Clear error and warning messages', None, setter=self.set_clean),
 'laser':    LDO('RWE','Laser Control',[''], legalValues=laserLV,
                 setter=self.set_laser),
 'adcScale': LDO('RC','Scale to convert ADC readings to volts', vref/2**23,units='V'),
@@ -199,9 +199,10 @@ class Dev(liteserver.Device):
 
     def set_clean(self):
         ts = time.time()
-        self.PV['status'].set_valueAndTimestamp('',ts)
-        self.PV['msg'].set_valueAndTimestamp('',ts)
-        self.PV['pim_Status'].set_valueAndTimestamp('',ts)
+        for pvname in ('status','msg','pim_Status'):
+            self.PV[pvname].set_valueAndTimestamp('',ts)
+        for pvname in ('srate','recLimit','timeout','received','current','noise','p2p'):
+            self.PV[pvname].set_valueAndTimestamp([0.],ts)
         #self.publish() This would lock!!! 
         self.forcePublish = True# trigger one publish() in main thread
         return 0
