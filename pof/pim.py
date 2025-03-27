@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """Support of the PoF PIM board"""
-__version__ = '0.4.3 2024-11-07'# Clean! improved, 
+__version__ = '0.4.5 2025-03-25'# adcScale corrected to Vref/2**24
 #TODO: handle <?ERR?...> and <T...> messages from SIM
 
 import sys, time, threading
@@ -16,7 +16,7 @@ SerDev = None
 get_data_lock = threading.Lock()#Important! To avoid missing writes
 DevInstance = None
 
-Rsense = 10.# Ohms
+Rsense = 20.# Ohms
 SRate = [5.88,11.76,23.52,47.01,93.93,187.45,373.28,740.18]#,1499.49,2816.35'
 SRateLV = [str(i) for  i in SRate]
 laserLV = ['','OFF','MinPower','MaxPower']
@@ -102,12 +102,13 @@ class Dev(liteserver.Device):
 'Clean!':    LDO('WEI','Clear error and warning messages', None, setter=self.set_clean),
 'laser':    LDO('RWE','Laser Control',[''], legalValues=laserLV,
                 setter=self.set_laser),
-'adcScale': LDO('RC','Scale to convert ADC readings to volts', vref/2**23,units='V'),
+'adcScale': LDO('RC','Scale to convert ADC readings to volts', vref/2**24,units='V'),
 'nsamples': LDO('R','Number of samples, accumulated by SIM since last report, depends on srate and timeout', 0),
 'received': LDO('R','Number of samples received from SIM', 0),
 'nstats':   LDO('R','Number of samples in on-board statistics calculation', 0),
 #'mean':     LDO('R','On-board-calculated mean of the voltage over Rsense', 0., units='V'),
 'current':  LDO('R','Average current through Rsense, averaged over 1 s.', 0., units='A'),
+'rsense':   LDO('R','Sense resistor', Rsense, units='Ohm'),
 'noise':    LDO('R','Standard deviation of the current', 0., units='A'),
 'p2p':      LDO('R','Peak-to-peak current amplitude', 0., units='A'),
 'samples':  LDO('R','Current samples, accumulated during 1 s', [0.], units='A'),
