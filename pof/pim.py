@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """Support of the PoF PIM board"""
-__version__ = '0.4.5 2025-03-25'# adcScale corrected to Vref/2**24
+__version__ = '0.4.6 2025-03-27'# Exit if serial interface is disconnected
 #TODO: handle <?ERR?...> and <T...> messages from SIM
 
 import sys, time, threading
@@ -361,7 +361,8 @@ class Dev(liteserver.Device):
             except serial.SerialException as e:
                 printe(f'ERR: serialException: {e}')
                 SerDev.close()
-                sys.exit(1)
+                Dev.EventExit.set()
+                break
 
             if not self.initialized:
                 printvv('Initialization not finished')
