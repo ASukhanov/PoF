@@ -1,0 +1,24 @@
+-----------+---+----+---------------------------------------------------------
+ Signal    Nano L432 Note
+-----------+---+----+---------------------------------------------------------
+A1          D10 PA11 OpAmp gain
+A0          D9  PA8  OpAmp gain
+D7          D7  PC14 5V_SW. Occupied by RCC_OSC32_OUT
+SW_STATE    D6  PB1
+POW_GOOD    D5  PB6
+BUSY        D4  PB7  Not needed. The Busy state can be determined by bit31 of data.
+CS          D3  PB0  Could be permamently set to 0 for 2-wire sommunication.
+W-Tx        TX  PA9
+W-RX        RX  PA10
+SCK         D13 PB3  On L432 it is defaulted to LD3 Green
+MISO        D12 PB4
+MOSI        D11 PB5  Set it High to select best noise performance, 6.9 Hz sampling rate
+
+       Diagnostics
+LED_GREEN   D2  PA12
+LED_RED     A6  PA7
+LED_BLUE    A5  PA6
+-----------+---+----+---------------------------------------------------------
+To control D7 the following switches required:
+SB4-OFF, SB6-ON, SB5-OFF, SB7-OFF, SB8-ON/OFF
+ 
