@@ -62,13 +62,13 @@ struct {
 
 /*huart2 is for debugging output, it communicates through USB (STLink).
  *To connect from a host: python3 -m serial.tools.miniterm /dev/ttyACM0 115200
- */
-#define UART2_TXSIZE 80
+ define UART2_TXSIZE 80
 struct {
   uint8_t len;
   uint8_t size;
   char buf[UART2_TXSIZE];
 }dbgUart_out = {0,UART2_TXSIZE,""};
+*/
 
 // huart1 is device communication link
 struct {
@@ -82,8 +82,8 @@ int RX_overrun = 0;
 uint32_t lastTickMS = 0;
 
 // global variables used in other programs
-uint16_t reportingInterval = 1000;
-uint16_t pollingInterval = 160;
+uint16_t reportingInterval = 1000;// do not report at all if it >= 32000
+uint16_t receiveTimeout = 160;
 uint32_t tickMS;// Tick count in milliseconds
 struct DATACHUNK datachunk = {0,DATACHUNKSIZE};
 uint8_t dbg = 1;// 0:no debugging, bit0:debug output to dbgUart, bits[1:7] debugging level
@@ -107,32 +107,39 @@ void uart_transmit(uint8_t len){
     HAL_GPIO_TogglePin(LED_RED);
   }
 }
-void dbgUart_printf(const char* format, ...){
-  //printf to debugging UART
-  if ((dbg&1) == 0)
-    return;
-  va_list argptr;
-  va_start(argptr, format);
-  vsnprintf(dbgUart_out.buf, dbgUart_out.size, format, argptr);
-  va_end(argptr);
-  if (HAL_UART_Transmit(&huart2, (uint8_t*)&dbgUart_out.buf,
-			strlen(dbgUart_out.buf), HAL_MAX_DELAY) != HAL_OK) {
+void uart2_transmit(uint8_t len){
+  uart_out.len = len;
+  if (HAL_UART_Transmit(&huart2, (uint8_t*)&uart_out.buf, len,
+			HAL_MAX_DELAY) != HAL_OK) {
       __NOP();// to place breakpoint
   }
 }
-void uart_printf(const char* format, ...){
-  //printf to main UART
-  if (dbg == 0)
-    return;
-  va_list argptr;
-  va_start(argptr, format);
-  vsnprintf(uart_out.buf, uart_out.size, format, argptr);
-  va_end(argptr);
-  if ((dbg&0xFE) != 0)
-    uart_transmit(strlen(uart_out.buf));
-  dbgUart_printf("%s",uart_out.buf);
-}
 
+void uart_printf(const char* format, ...){
+  // printf to main UART
+  va_list argptr;
+  strcpy(uart_out.buf, "<T");
+  va_start(argptr, format);
+  vsnprintf(uart_out.buf+2, uart_out.size, format, argptr);
+  va_end(argptr);
+  int l = strlen(uart_out.buf);
+  uart_out.buf[l] = '>';
+  uart_out.buf[l+1] = 0;
+  uart_transmit(l+1);
+  if (dbg&1)
+    uart2_transmit(l+1);
+}
+void uart_hexdump(const char* prefix, uint8_t* data, uint8_t len){
+  // hexdump to main uart
+  uint8_t l;
+  strcpy(uart_out.buf,prefix);
+  for (int i=0; i<len; i++){
+      l = strlen(uart_out.buf);
+      snprintf(uart_out.buf+l, uart_out.size-l, "%.2x,", data[i]);
+  }
+  strncat(uart_out.buf, "\n", uart_out.size);
+  uart_transmit(strlen(uart_out.buf));
+}
 void send_toPIM(const char* prefix, int32_t* data, uint8_t len){
   // Send PIM-formatted int32_t data to main UART
   // Data will be prepended with suffix and appended with '>\n'
@@ -142,36 +149,50 @@ void send_toPIM(const char* prefix, int32_t* data, uint8_t len){
       l = strlen(uart_out.buf);
       snprintf(uart_out.buf+l, uart_out.size-l, "%li,", data[i]);
   }
-  strncat(uart_out.buf, ">\n", uart_out.size);
-  uart_transmit(strlen(uart_out.buf));
+  // replace trailing comma with '>'
+  l = strlen(uart_out.buf);
+  uart_out.buf[l-1] = '>';
+  uart_transmit(l);
 }
 void printe(char* msg){
   //send error message to main UART
-  snprintf(uart_out.buf, uart_out.size, "ERR: %s\n", msg);
+  snprintf(uart_out.buf, uart_out.size, "<?ERR: %s>", msg);
   uart_transmit(strlen(uart_out.buf));
+  if (dbg&1)
+    uart2_transmit(uart_out.len);
 }
 int wait_input(uint16_t timeout){
   //Returns 0: command was processed, 1: timeout, -1: filling of command buffer is not finished, -2: error
   uint8_t byte_received = 0;
-  if(HAL_UART_Receive(&huart1, &byte_received, 1, timeout)!=HAL_OK) //if timeout
-    return 1;
+  uint16_t to = timeout;
+  int rxNotEmpty;
+  if (to == 0){
+      rxNotEmpty =  __HAL_UART_GET_FLAG(&huart1, UART_FLAG_RXNE);
+      if (rxNotEmpty == 0)
+	return 1;
+      to = 1;
+  }
+  if(HAL_UART_Receive(&huart1, &byte_received, 1, to)!=HAL_OK) //if timeout
+  return 1;
 
+  // Character received
   HAL_GPIO_TogglePin(LED_BLUE);
-  if (dbg&0x80)
-    uart_printf("char: %u\n", byte_received);
+  if (dbg&8)
+    uart_printf("DBG8:char: %u\n", byte_received);
 
+  // Process character
   if (input_cmd.len >= input_cmd.size){
       printe("uart1 RX overrun");
       input_cmd.len = 0;
       return -2;
-  //}else if (byte_received == CR){
-  //    input_cmd.buf[input_cmd.len] = 0;
   }else if (byte_received == SER_END_CHAR){
+      // Command received, process it
       input_cmd.buf[input_cmd.len] = 0;
       board_process_cmd(input_cmd.buf);
       input_cmd.len = 0;
       return 0;
   }else if (byte_received == SER_START_CHAR){
+      // Command begun
       input_cmd.len = 0;
       return -1;
   }else{
@@ -221,10 +242,14 @@ int main(void)
   {
     // Wait for 1 char from huart1
     //HAL_Delay(1000);
-    wait_input(pollingInterval);
+    wait_input(receiveTimeout);
     tickMS =  HAL_GetTick();
-    if (board_acquire_sample() != 0)
+    if (board_acquire_sample() != 0){
+      if (dbg&2)
+	uart_printf("WAR2:ADC empty");
+      HAL_GPIO_TogglePin(LED_RED);
       continue;
+    }
     cycle++;
     // One ADC sample acquired and processed, update LEDs.
     HAL_GPIO_WritePin(LED_GREEN, LED(cycle&1));
@@ -232,17 +257,19 @@ int main(void)
     HAL_GPIO_WritePin(LED_RED, LED(cycle&4));
     if (datachunk.len >= datachunk.size){
         // The chunk is full.
-        send_toPIM("<R ", datachunk.buf, datachunk.len);
+        send_toPIM("<R", datachunk.buf, datachunk.len);
         datachunk.len = 0;
     }
-    if ((tickMS - lastTickMS) > reportingInterval){
-      // Reporting interval has elapsed. Send statistics.
-      lastTickMS = tickMS;
-      uart_printf("cycle %li, @%i ms, recState:%i\n", cycle, tickMS, recState);
-      statistics = board_report();
-      uart_printf("mean*10(%i)=%i, stdev*10=%i, p2p=%i\n", statistics.n, statistics.mean, statistics.stdev, statistics.peak2peak);
-      send_toPIM("<M ", (int32_t*)&statistics, 5);
-    }
+    if ((tickMS - lastTickMS) > reportingInterval)
+      if (reportingInterval < 32000){
+	// Reporting interval has elapsed. Send statistics.
+	lastTickMS = tickMS;
+	//uart_printf("cycle %li, @%i ms, recLimit:%i\n", cycle, tickMS, recLimit);
+	statistics = board_report();
+	//uart_printf("mean*10(%i)=%i, stdev*10=%i, p2p=%i\n", statistics.n, statistics.mean, statistics.stdev, statistics.peak2peak);
+	send_toPIM("\n<M", (int32_t*)&statistics, 6);
+	uart2_transmit(uart_out.len);
+    };
     /* USER CODE END WHILE */
 
     /* USER CODE BEGIN 3 */
@@ -424,33 +451,32 @@ static void MX_GPIO_Init(void)
   __HAL_RCC_GPIOB_CLK_ENABLE();
 
   /*Configure GPIO pin Output Level */
-  HAL_GPIO_WritePin(GPIOA, LED_BLUE_Pin|LED_RED_Pin|LED_GREEN_Pin, GPIO_PIN_RESET);
+  HAL_GPIO_WritePin(GPIOA, LED_BLUE_Pin|LED_RED_Pin|LED_GREEN_Pin, GPIO_PIN_SET);
 
   /*Configure GPIO pin Output Level */
-  HAL_GPIO_WritePin(GPIOB, CS_Pin|SW_STATE_Pin, GPIO_PIN_RESET);
+  HAL_GPIO_WritePin(CS_GPIO_Port, CS_Pin, GPIO_PIN_RESET);
 
-  /*Configure GPIO pins : LED_BLUE_Pin LED_RED_Pin LED_GREEN_Pin */
-  GPIO_InitStruct.Pin = LED_BLUE_Pin|LED_RED_Pin|LED_GREEN_Pin;
+  /*Configure GPIO pin Output Level */
+  HAL_GPIO_WritePin(GPIOA, A0_Pin|A1_Pin, GPIO_PIN_RESET);
+
+  /*Configure GPIO pins : LED_BLUE_Pin LED_RED_Pin A0_Pin A1_Pin
+                           LED_GREEN_Pin */
+  GPIO_InitStruct.Pin = LED_BLUE_Pin|LED_RED_Pin|A0_Pin|A1_Pin
+                          |LED_GREEN_Pin;
   GPIO_InitStruct.Mode = GPIO_MODE_OUTPUT_PP;
   GPIO_InitStruct.Pull = GPIO_NOPULL;
   GPIO_InitStruct.Speed = GPIO_SPEED_FREQ_LOW;
   HAL_GPIO_Init(GPIOA, &GPIO_InitStruct);
 
-  /*Configure GPIO pins : CS_Pin SW_STATE_Pin */
-  GPIO_InitStruct.Pin = CS_Pin|SW_STATE_Pin;
+  /*Configure GPIO pin : CS_Pin */
+  GPIO_InitStruct.Pin = CS_Pin;
   GPIO_InitStruct.Mode = GPIO_MODE_OUTPUT_PP;
   GPIO_InitStruct.Pull = GPIO_NOPULL;
   GPIO_InitStruct.Speed = GPIO_SPEED_FREQ_LOW;
-  HAL_GPIO_Init(GPIOB, &GPIO_InitStruct);
+  HAL_GPIO_Init(CS_GPIO_Port, &GPIO_InitStruct);
 
-  /*Configure GPIO pins : A0_Pin A1_Pin */
-  GPIO_InitStruct.Pin = A0_Pin|A1_Pin;
-  GPIO_InitStruct.Mode = GPIO_MODE_INPUT;
-  GPIO_InitStruct.Pull = GPIO_NOPULL;
-  HAL_GPIO_Init(GPIOA, &GPIO_InitStruct);
-
-  /*Configure GPIO pins : POW_GOOD_Pin BUSY_Pin */
-  GPIO_InitStruct.Pin = POW_GOOD_Pin|BUSY_Pin;
+  /*Configure GPIO pins : SW_STATE_Pin POW_GOOD_Pin BUSY_Pin */
+  GPIO_InitStruct.Pin = SW_STATE_Pin|POW_GOOD_Pin|BUSY_Pin;
   GPIO_InitStruct.Mode = GPIO_MODE_INPUT;
   GPIO_InitStruct.Pull = GPIO_NOPULL;
   HAL_GPIO_Init(GPIOB, &GPIO_InitStruct);
