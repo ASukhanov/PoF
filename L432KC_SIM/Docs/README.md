@@ -34,7 +34,7 @@ SB4-OFF, SB6-ON, SB5-OFF, SB7-OFF, SB8-ON/OFF
 ## Debugging
 The RS232 with 3.3V levels should be connected: RXD - to PA9 (W_TX), TXD - to PA10 (W_RX).
 
-To communicate to board over UART1:
+To communicate with the board over UART1:
 
     python3 -m serial.tools.miniterm /dev/ttyUSB0 57600
 
