@@ -4,9 +4,8 @@ Design environment: STM32CubeIde v1.14.0.
 
 ## Solder beads
 
-SB9 Off to power from +5V
-SB5,SB7 = OFF, SB6 = ON to allow D7 control
-Note: SB16 and SB18 are better be OFF, they connect PA6-PB6 and PA5-PB5.
+SB9 Off to power from +5V<br>
+Note: SB16 and SB18 are better be OFF, they connect PA6-PB6 and PA5-PB5.<br>
 
 ## Pinout
 ```
@@ -59,7 +58,7 @@ The actual data delivery interval is the sum of timeout value and the ADC conver
 ## Testing/Debugging
 The RS232 with 3.3V levels should be connected: RXD - to PA9 (W_TX), TXD - to PA10 (W_RX).
 
-To communicate to board over UART1:
+To communicate with the board over UART1:
 
     python3 -m serial.tools.miniterm /dev/ttyUSB0 57600
 
