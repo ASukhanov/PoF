@@ -1,7 +1,6 @@
 #!/usr/bin/env python3
 """Support of the PoF SIM board"""
-__version__ = '0.3.1 2024-08-23'# STS vRef added, get_data_lock, serdev timeout reduced to 0.1
-
+__version__ = '0.3.2 2025-12-20'# fixed bug Missing `<`
 import sys, time, threading
 timer = time.perf_counter
 import numpy as np
@@ -189,11 +188,14 @@ class Dev(liteserver.Device):
             txt = txt[1:]
         if txt[0] != '<':
             # This should not happen with recent firmware
-            printw(f'msg: {txt}')
-            self.PV['msg'].set_valueAndTimestamp(txt, ts)
-            return True
+            msg = f'Missing `<`: {txt}'
+            printw(msg)
+            return False
         printv(f'>handle {txt}')
         ag = self.PV['adcScale'].value[0]
+        if len(txt) < 2:
+            printw(f'Short msg: {txt}')
+            return False
         if txt[1] == 'M':
             # Regular report
             txtnums = txt[2:-1].split(',')
