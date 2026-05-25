@@ -4,6 +4,7 @@ Design environment: STM32CubeIde v1.14.0.
 
 ## Eval Board MB1180. Solder beads
 
+
 SB9 Off to power from +5V
 SB5,SB7 = OFF, SB6 = ON to allow D7 control
 Note: SB16 and SB18 are better be OFF, they connect PA6-PB6 and PA5-PB5.
@@ -69,7 +70,6 @@ Max data transfer rate over 57600 Baud serial connection is 572 Hz.
 ### v0.3.2 2025-12-20. Latest
 
 
-
 ## Noise
 The RMS noise at higher rates depends on program behavior.
 The single data transfer (chunk size = 1) shows smaller noise.
@@ -84,6 +84,7 @@ of program flow is less synchronous with the ADC sampling.
 ### Dependence of the ADC value from sampling rate.
 ADC input shortened. Polling interval 1ms (PI=1).
 
+```
   S0: <M 7,7,-7195,86,27
   S1: <M 14,14,-7251,117,50,>
   S2: <M 27,27,-7384,118,52,>
@@ -93,7 +94,7 @@ ADC input shortened. Polling interval 1ms (PI=1).
   S6: <M 166,100,-5922,147,70,>
   S7: <M 495,100,-3598,112,52,>
   S8: <M 495,100,-1607,107,48,>
-
+```
 Here S is sampling rate selector.<br>
 M: number of acquired samples, stat volume, mean*10, stdev*10, peak2peak.
 
