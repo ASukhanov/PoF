@@ -14,7 +14,7 @@ title = 'Testing of the SIM board'
 startup = {
 'SIM server':{help:'LiteServer of the SIM board',
   cd:	rootDir + '/github/PoF/pof',
-  cmd:_screen('SIM', f'{pypath} sim -ilocalhost -p9700'),
+  cmd:_screen('sim', f'{pypath} sim -ilocalhost -p9700'),
   proc: 'sim -ilocalhost -p9700',
   shell: True,
   },
