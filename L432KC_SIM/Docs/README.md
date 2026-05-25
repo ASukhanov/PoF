@@ -2,13 +2,13 @@
 Firmware for Nucleo L432KC eval board for PoF SIM board.
 Design environment: STM32CubeIde v1.14.0.
 
-## Solder beads
+## Eval Board MB1180. Solder beads
 
 SB9 Off to power from +5V
 SB5,SB7 = OFF, SB6 = ON to allow D7 control
 Note: SB16 and SB18 are better be OFF, they connect PA6-PB6 and PA5-PB5.
 
-## Pinout
+### Pinout
 ```
 //-----------------+-------------------+----------------------------------------
 //    Pins          STM32               Arduino
@@ -65,7 +65,10 @@ Power consumption from USB with DC570A = 65 mA, 0.32 mW.
 Max sampling rate: 800 Hz.
 Max data transfer rate over 57600 Baud serial connection is 572 Hz.
 
-### v0.1.4 2024-08-16. Release
+### v0.1.4 2024-08-16. First release
+### v0.3.2 2025-12-20. Latest
+
+
 
 ## Noise
 The RMS noise at higher rates depends on program behavior.
