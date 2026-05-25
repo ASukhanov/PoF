@@ -2,7 +2,8 @@
 Firmware for Nucleo L432KC eval board for PoF SIM board.
 Design environment: STM32CubeIde v1.14.0.
 
-## Solder beads
+## Eval Board NUCLEO-L$#!KC, Solder beads
+![Top layout](Docs/STM32L432_top_layout.jpg)
 
 SB9 Off to power from +5V<br>
 Note: SB16 and SB18 are better be OFF, they connect PA6-PB6 and PA5-PB5.<br>
