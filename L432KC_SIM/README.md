@@ -27,7 +27,8 @@ Note: SB16 and SB18 are better be OFF, they connect PA6-PB6 and PA5-PB5.<br>
 #define SIM_WTX     GPIOA,GPIO_PIN_9//  TX
 #define SIM_WRX     GPIOA,GPIO_PIN_10// RX
 //-----------------+-------------------+----------------------------------------
-To control D7 the following switches required:
+Signal 5V_SW is not used on the SIM.
+If, by some reason, 5V_SW is active, then following switches required:
 SB4-OFF, SB6-ON, SB5-OFF, SB7-OFF, SB8-ON/OFF
 ```
 ## Power Consumption
@@ -89,3 +90,56 @@ Reading 0 corresponds to 0V difference,  Minimal reading is -8388608 for -VREF/2
 ## Firmware flowchart.
 
 ![Firmware flowchart](L432KC_SIM/Docs/SIM_flowchart.png)
+
+## Noise
+The RMS noise at higher rates depends on program behavior.
+The single data transfer (chunk size = 1) shows smaller noise.
+This is due to the PCB signalling is more synchronous with the ADC sampling.
+The overall data rate is also faster with single data transfers because the 
+transfer time overlaps with ADC conversion time.
+
+Note. The interrrupt driven program may result with higher system noise because 
+of program flow is less synchronous with the ADC sampling. 
+
+## Project status
+### v0.1.1 
+ADC LTC2440 on eval board is supported. RMS reported, RMS ~1 LSB, or 0.3 uV.
+This correspond to dynamic range of 23 bits or 140 dB!
+Noise depends on program flow. For build 0.1.3 the RMS increased to 25 counts.
+For previous builds it was 2.5 counts.
+
+Power consumption from USB with DC570A = 65 mA, 0.32 mW.
+
+Max sampling rate: 800 Hz.
+Max data transfer rate over 57600 Baud serial connection is 572 Hz.
+
+### v0.1.4 2024-08-16. Release
+### v0.3.2 2025-12-20. Latest
+
+## Issues
+### Dependence of the ADC value from sampling rate.
+ADC input shortened. Polling interval 1ms (PI=1).
+
+  S0: <M 7,7,-7195,86,27
+  S1: <M 14,14,-7251,117,50,>
+  S2: <M 27,27,-7384,118,52,>
+  S3: <M 27,27,-7429,121,48,>
+  S4: <M 100,100,-7052,174,132,>
+  S5: <M 166,100,-7835,172,80,>
+  S6: <M 166,100,-5922,147,70,>
+  S7: <M 495,100,-3598,112,52,>
+  S8: <M 495,100,-1607,107,48,>
+
+Here S is sampling rate selector.<br>
+M: number of acquired samples, stat volume, mean*10, stdev*10, peak2peak.
+
+Note, the acquired sampling rate maxes at 495 Hz.
+
+If PI=4ms The data delivery is faster:
+PI=4, S5: <M 198,100,-7940,167,85,>
+
+The opimal setting for 200 Hz data rate: S5, PI=4.
+
+Strange also that stdev drops when S>5.
+
+Observation: This effect almost disappear when running in non-debugging mode.
