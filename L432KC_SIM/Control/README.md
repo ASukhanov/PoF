@@ -2,11 +2,12 @@
 Connect computer serial port to pins TX (PA9) and RX (PA10) of the NUCLEO board.
 
 * Start procman
-[procman](procman.jpg)
+
+![procman](./procman.jpg)
 
 * In procman: Start ```SIM server``` and ```SIM page```
 
-[SIM page](sim_pypet.jpg)
+![SIM page](./sim_pypet.jpg)
 
 
 
