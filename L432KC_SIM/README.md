@@ -33,9 +33,9 @@ Signal 5V_SW is not used on the SIM.
 If, by some reason, 5V_SW is active, then following switches required:
 SB4-OFF, SB6-ON, SB5-OFF, SB7-OFF, SB8-ON/OFF
 ```
-[Pin Names](Docs/NUCLEO-L432KC_pin_names.jpg.jpg)
+[Pin Names](Docs/NUCLEO-L432KC_Nano_headersr.png)
 
-[Nano Connector](Doc/NUCLEO-L432KC_Nano_connector.png)
+[Nano Connector](Docs/NUCLEO-L432KC_Nano_connector.png)
 
 ## Power Consumption
 Firmware 0.1.4 2024-08-19
